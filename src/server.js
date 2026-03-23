@@ -1,95 +1,80 @@
 const express = require('express');
-const mongoose = require('mongoose');
-const { initI18n, i18nextMiddleware } = require('./i18n');
-const Translation = require('./models/Translation');
+const { i18n, reconfigure }    = require('./i18n');
+const { connect, updateTranslations, translationsCollection } = require('./db');
 
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/i18n_demo';
 const PORT = process.env.PORT || 3000;
 
 async function start() {
-  // 1. Connect to MongoDB
-  await mongoose.connect(MONGO_URI);
-  console.log('MongoDB connected:', MONGO_URI);
+  // 1. Connect to MongoDB and configure i18n from the stored catalog
+  await connect();
+  await reconfigure();
 
-  // 2. Initialise i18next (loads translations from MongoDB)
-  const i18n = await initI18n();
-  console.log('i18next initialised. Loaded locales:', i18n.languages);
-
-  // 3. Create Express app
+  // 2. Create Express app
   const app = express();
   app.use(express.json());
 
-  // 4. Mount i18next middleware – populates req.t() and req.language on every request
-  app.use(i18nextMiddleware.handle(i18n));
+  // 3. Mount i18n middleware – adds res.__() and sets the locale per request
+  app.use(i18n.init);
+
+  // 4. Locale detection middleware
+  //    Priority: ?lng= query string → Accept-Language header → default
+  app.use((req, res, next) => {
+    const lang = req.query.lng || req.acceptsLanguages(i18n.getLocales());
+    if (lang) res.setLocale(lang);
+    next();
+  });
 
   // ─── Demo routes ────────────────────────────────────────────────────────────
 
   /**
-   * GET /hello
-   * Responds with a translated greeting.
+   * GET /hello[?lng=es][&name=Alice]
    *
-   * Examples:
-   *   GET /hello?lng=es          → "¡Hola, Mundo!"
-   *   GET /hello?lng=fr&name=Alice → "Bonjour, Alice!"
-   *   GET /hello  (Accept-Language: en)  → "Hello, World!"
+   * Uses res.__() provided by i18n middleware.
+   * '%s' is the sprintf placeholder for positional arguments.
    */
   app.get('/hello', (req, res) => {
     const name = req.query.name || 'World';
     res.json({
-      language: req.language,
-      message: req.t('greeting', { name }),
-      welcome: req.t('welcome'),
+      language: res.getLocale(),
+      // sprintf style: greeting = 'Hello, %s!'
+      message:  res.__('greeting', name),
+      welcome:  res.__('welcome'),
     });
   });
 
   /**
-   * GET /translations/:locale/:namespace
-   * Returns the raw translation map stored in MongoDB.
+   * GET /translations/:locale
+   * Returns the raw translation object stored in MongoDB.
    */
-  app.get('/translations/:locale/:namespace', async (req, res) => {
-    const doc = await Translation.findOne({
-      locale: req.params.locale,
-      namespace: req.params.namespace,
-    });
-    if (!doc) return res.status(404).json({ error: 'Not found' });
-    res.json({ locale: doc.locale, namespace: doc.namespace, translations: Object.fromEntries(doc.translations) });
+  app.get('/translations/:locale', async (req, res) => {
+    const coll = await translationsCollection();
+    const doc  = await coll.findOne({ locale: req.params.locale });
+    if (!doc) return res.status(404).json({ error: 'Locale not found' });
+    res.json({ locale: doc.locale, translations: doc.translations });
   });
 
   /**
-   * PUT /translations/:locale/:namespace
-   * Merges new key-value pairs into the translation document,
-   * then reloads the i18next cache so changes take effect immediately.
+   * PUT /translations/:locale
+   * Merges new key-value pairs, then reloads the in-memory i18n catalog.
    *
    * Body: { "welcome": "¡Bienvenido al sistema!" }
    */
-  app.put('/translations/:locale/:namespace', async (req, res) => {
-    const { locale, namespace } = req.params;
+  app.put('/translations/:locale', async (req, res) => {
     const updates = req.body;
 
     if (typeof updates !== 'object' || Array.isArray(updates)) {
       return res.status(400).json({ error: 'Body must be a JSON object of key-value pairs' });
     }
 
-    // Build $set payload for the Map field
-    const setPayload = {};
-    for (const [key, value] of Object.entries(updates)) {
-      setPayload[`translations.${key}`] = value;
-    }
+    const doc = await updateTranslations(req.params.locale, updates);
 
-    const doc = await Translation.findOneAndUpdate(
-      { locale, namespace },
-      { $set: setPayload },
-      { upsert: true, new: true }
-    );
-
-    // Tell i18next to reload this locale+namespace from MongoDB
-    await i18n.reloadResources([locale], [namespace]);
+    // Reload the full catalog from MongoDB and re-configure i18n in memory
+    await reconfigure();
 
     res.json({
-      message: 'Translations updated and cache reloaded',
-      locale: doc.locale,
-      namespace: doc.namespace,
-      translations: Object.fromEntries(doc.translations),
+      message:      'Translations updated and i18n reconfigured',
+      locale:       doc.locale,
+      translations: doc.translations,
     });
   });
 

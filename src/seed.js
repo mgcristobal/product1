@@ -1,77 +1,78 @@
 /**
- * seed.js – Populates MongoDB with initial translations for en / es / fr.
+ * seed.js – Inserts initial translations (en / es / fr) into MongoDB.
+ *
+ * Uses the native MongoDB driver directly (no Mongoose).
  *
  * Usage:
  *   node src/seed.js
  *   MONGO_URI=mongodb://user:pass@host/db node src/seed.js
  */
 
-const mongoose = require('mongoose');
-const Translation = require('./models/Translation');
+const { connect, translationsCollection } = require('./db');
 
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/i18n_demo';
-
+// Note: 'i18n' package uses '%s' for positional interpolation.
+// Named placeholders '%(name)s' are also supported.
 const seeds = [
   {
     locale: 'en',
-    namespace: 'common',
     translations: {
-      welcome: 'Welcome',
-      greeting: 'Hello, {{name}}!',
-      farewell: 'Goodbye, {{name}}!',
-      'nav.home': 'Home',
-      'nav.about': 'About',
-      'nav.contact': 'Contact',
+      welcome:         'Welcome',
+      greeting:        'Hello, %s!',
+      farewell:        'Goodbye, %s!',
+      'nav.home':      'Home',
+      'nav.about':     'About',
+      'nav.contact':   'Contact',
       'errors.notFound': 'Page not found',
-      'errors.server': 'Internal server error',
+      'errors.server':   'Internal server error',
     },
   },
   {
     locale: 'es',
-    namespace: 'common',
     translations: {
-      welcome: 'Bienvenido',
-      greeting: '¡Hola, {{name}}!',
-      farewell: '¡Adiós, {{name}}!',
-      'nav.home': 'Inicio',
-      'nav.about': 'Acerca de',
-      'nav.contact': 'Contacto',
+      welcome:         'Bienvenido',
+      greeting:        '¡Hola, %s!',
+      farewell:        '¡Adiós, %s!',
+      'nav.home':      'Inicio',
+      'nav.about':     'Acerca de',
+      'nav.contact':   'Contacto',
       'errors.notFound': 'Página no encontrada',
-      'errors.server': 'Error interno del servidor',
+      'errors.server':   'Error interno del servidor',
     },
   },
   {
     locale: 'fr',
-    namespace: 'common',
     translations: {
-      welcome: 'Bienvenue',
-      greeting: 'Bonjour, {{name}} !',
-      farewell: 'Au revoir, {{name}} !',
-      'nav.home': 'Accueil',
-      'nav.about': 'À propos',
-      'nav.contact': 'Contact',
+      welcome:         'Bienvenue',
+      greeting:        'Bonjour, %s !',
+      farewell:        'Au revoir, %s !',
+      'nav.home':      'Accueil',
+      'nav.about':     'À propos',
+      'nav.contact':   'Contact',
       'errors.notFound': 'Page introuvable',
-      'errors.server': 'Erreur interne du serveur',
+      'errors.server':   'Erreur interne du serveur',
     },
   },
 ];
 
 async function seed() {
-  await mongoose.connect(MONGO_URI);
-  console.log('Connected to MongoDB:', MONGO_URI);
+  await connect();
+  const coll = await translationsCollection();
 
-  for (const { locale, namespace, translations } of seeds) {
-    const doc = await Translation.findOneAndUpdate(
-      { locale, namespace },
-      // Replace the entire translations map
-      { $set: { translations } },
-      { upsert: true, new: true }
+  // Ensure unique index on locale
+  await coll.createIndex({ locale: 1 }, { unique: true });
+
+  for (const { locale, translations } of seeds) {
+    const result = await coll.findOneAndUpdate(
+      { locale },
+      { $set: { translations }, $setOnInsert: { locale } },
+      { upsert: true, returnDocument: 'after' }
     );
-    console.log(`Seeded ${locale}/${namespace} — ${Object.keys(translations).length} keys (id: ${doc._id})`);
+    const keyCount = Object.keys(result.translations).length;
+    console.log(`Seeded locale "${locale}" — ${keyCount} keys`);
   }
 
-  await mongoose.disconnect();
   console.log('Done.');
+  process.exit(0);
 }
 
 seed().catch((err) => {
