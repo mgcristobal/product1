@@ -1,0 +1,20 @@
+{
+  "name": "nodejs-i18n-mongodb",
+  "version": "1.0.0",
+  "description": "Demo: i18n in Node.js with translations stored in MongoDB",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "seed": "node src/seed.js",
+    "dev": "nodemon src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "mongoose": "^8.0.3",
+    "i18next": "^23.7.6",
+    "i18next-http-middleware": "^3.5.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
